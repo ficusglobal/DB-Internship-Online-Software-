@@ -1,0 +1,18 @@
+package internship_registration.repository;
+
+import internship_registration.entity.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.Optional;
+
+@Repository
+public interface UserRepository extends JpaRepository<User, String> {
+
+
+    Optional<User> findByEmailOrMobileNo(String email, String mobileNo);
+
+    boolean existsByEmail(String email);
+
+    boolean existsByMobileNo(String mobileNo);
+}
