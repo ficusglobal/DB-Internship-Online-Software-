@@ -27,14 +27,26 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
+                .cors(cors -> {}) // Enable CORS handling if frontend runs on different port/domain
                 .authorizeHttpRequests(auth -> auth
-                        // 1. Public Endpoints (Login and public registrations)
+                        // 1. Authentication endpoints (login, register student, register cafe)
                         .requestMatchers("/api/auth/**").permitAll()
 
-                        // 2. Restricted Endpoints (ONLY Super Admin can access anything under /api/admin/)
+                        // 2. Razorpay Webhook endpoint (MUST be public so Razorpay servers can POST events)
+                        .requestMatchers("/api/payment/webhook").permitAll()
+
+                        // 3. Public dropdowns & master data (universities, colleges, batches, courses)
+                        .requestMatchers("/api/public/**").permitAll()
+                        .requestMatchers("/api/master/**").permitAll()
+
+                        // 4. Restricted Super Admin Endpoints
                         .requestMatchers("/api/admin/**").hasAuthority("SUPER_ADMIN")
 
-                        // 3. Everything else just requires the user to be logged in
+                        // 5. Authenticated Student, Payment Creation/Verification, and User Endpoints
+                        .requestMatchers("/api/student/**").authenticated()
+                        .requestMatchers("/api/payment/**").authenticated()
+
+                        // 6. Any other incoming requests require valid JWT
                         .anyRequest().authenticated()
                 )
                 .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
