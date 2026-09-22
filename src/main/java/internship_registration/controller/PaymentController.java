@@ -29,4 +29,18 @@ public class PaymentController {
         PaymentVerificationResponse response = paymentService.verifyPayment(request);
         return ResponseEntity.ok(response);
     }
+
+    @PostMapping("/webhook")
+    public ResponseEntity<String> handleWebhook(
+            @RequestBody String rawPayload,
+            @RequestHeader("X-Razorpay-Signature") String signature) {
+        try {
+            paymentService.handleWebhookEvent(rawPayload, signature);
+            return ResponseEntity.ok("Webhook received and processed");
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body("Webhook processing failure");
+        }
+    }
 }

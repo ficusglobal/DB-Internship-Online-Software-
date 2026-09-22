@@ -36,9 +36,11 @@ public class PaymentService {
     @Value("${razorpay.key.secret}")
     private String keySecret;
 
+    @Value("${razorpay.webhook.secret:}")
+    private String webhookSecret;
+
     @Transactional
     public CreateOrderResponse createOrder(CreateOrderRequest request) throws Exception {
-        // Validates existence of registration and uses the entity
         InternshipRegistration registration = registrationRepository.findById(request.getRegistrationId())
                 .orElseThrow(() -> new IllegalArgumentException("Registration not found: " + request.getRegistrationId()));
 
@@ -105,17 +107,7 @@ public class PaymentService {
             payment.setStatus("PAID");
             paymentRepository.save(payment);
 
-            // Update registration status using the first non-pending status available in your enum
-            registrationRepository.findById(request.getRegistrationId()).ifPresent(reg -> {
-                // If your RegistrationStatus has CONFIRMED, COMPLETED, or SUBMITTED, pick the appropriate one:
-                try {
-                    reg.setStatus(RegistrationStatus.valueOf("CONFIRMED"));
-                } catch (IllegalArgumentException e) {
-                    // Fallback to first available approved/active status in enum
-                    reg.setStatus(RegistrationStatus.values()[RegistrationStatus.values().length - 1]);
-                }
-                registrationRepository.save(reg);
-            });
+            updateRegistrationConfirmed(payment.getRegistrationId());
 
             return PaymentVerificationResponse.builder()
                     .status("SUCCESS")
@@ -131,5 +123,72 @@ public class PaymentService {
                     .message("Verification exception: " + e.getMessage())
                     .build();
         }
+    }
+
+    /**
+     * Handles asynchronous webhook events from Razorpay without needing any custom util classes.
+     */
+    @Transactional
+    public void handleWebhookEvent(String rawPayload, String signature) {
+        try {
+            // Built-in Razorpay HMAC-SHA256 signature verification
+            boolean isValid = Utils.verifyWebhookSignature(rawPayload, signature, webhookSecret);
+            if (!isValid) {
+                log.warn("Webhook signature mismatch");
+                throw new IllegalArgumentException("Invalid Razorpay webhook signature");
+            }
+        } catch (Exception e) {
+            log.error("Failed to verify webhook signature: {}", e.getMessage());
+            throw new IllegalArgumentException("Signature verification failed", e);
+        }
+
+        JSONObject event = new JSONObject(rawPayload);
+        String eventType = event.getString("event");
+
+        JSONObject payloadObj = event.getJSONObject("payload");
+        JSONObject paymentEntity = payloadObj.getJSONObject("payment").getJSONObject("entity");
+
+        String razorpayOrderId = paymentEntity.optString("order_id", null);
+        String razorpayPaymentId = paymentEntity.optString("id", null);
+
+        if (razorpayOrderId == null) {
+            log.info("Ignoring webhook event {}: No order_id present", eventType);
+            return;
+        }
+
+        Payment payment = paymentRepository.findByRazorpayOrderId(razorpayOrderId).orElse(null);
+        if (payment == null) {
+            log.warn("No payment found for order ID from webhook: {}", razorpayOrderId);
+            return;
+        }
+
+        if ("payment.captured".equals(eventType)) {
+            if (!"PAID".equalsIgnoreCase(payment.getStatus())) {
+                payment.setStatus("PAID");
+                payment.setRazorpayPaymentId(razorpayPaymentId);
+                paymentRepository.save(payment);
+
+                updateRegistrationConfirmed(payment.getRegistrationId());
+                log.info("Webhook updated payment to PAID for order: {}", razorpayOrderId);
+            }
+        } else if ("payment.failed".equals(eventType)) {
+            if (!"PAID".equalsIgnoreCase(payment.getStatus())) {
+                payment.setStatus("FAILED");
+                payment.setRazorpayPaymentId(razorpayPaymentId);
+                paymentRepository.save(payment);
+                log.warn("Webhook marked payment as FAILED for order: {}", razorpayOrderId);
+            }
+        }
+    }
+
+    private void updateRegistrationConfirmed(String registrationId) {
+        registrationRepository.findById(registrationId).ifPresent(reg -> {
+            try {
+                reg.setStatus(RegistrationStatus.valueOf("CONFIRMED"));
+            } catch (IllegalArgumentException e) {
+                reg.setStatus(RegistrationStatus.values()[RegistrationStatus.values().length - 1]);
+            }
+            registrationRepository.save(reg);
+        });
     }
 }
