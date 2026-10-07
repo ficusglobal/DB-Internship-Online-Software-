@@ -4,6 +4,7 @@ import internship_registration.dto.StudentProfileDetailsResponse;
 import internship_registration.entity.*;
 import internship_registration.repository.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,6 +16,30 @@ public class StudentService {
     private final CollegeRepository collegeRepository;
     private final InternshipRegistrationRepository registrationRepository;
     private final InternshipBatchRepository batchRepository;
+
+    /**
+     * Lookup by student id with an access check:
+     * admins can see anyone, a student only themselves, a cyber cafe only students it registered.
+     */
+    @Transactional(readOnly = true)
+    public StudentProfileDetailsResponse getStudentDetailsForCaller(String studentOrUserId, String callerUserId, boolean callerIsAdmin) {
+        Student student = studentRepository.findById(studentOrUserId)
+                .or(() -> studentRepository.findByUser_Id(studentOrUserId))
+                .orElseThrow(() -> new IllegalArgumentException("Student not found for identifier: " + studentOrUserId));
+
+        if (!callerIsAdmin) {
+            boolean isSelf = student.getUser() != null && callerUserId.equals(student.getUser().getId());
+            boolean isRegisteringCafe = registrationRepository
+                    .findFirstByStudent_IdOrderByCreatedAtDesc(student.getId())
+                    .map(InternshipRegistration::getCyberCafe)
+                    .map(cafe -> cafe.getUser() != null && callerUserId.equals(cafe.getUser().getId()))
+                    .orElse(false);
+            if (!isSelf && !isRegisteringCafe) {
+                throw new AccessDeniedException("You do not have access to this student");
+            }
+        }
+        return getStudentDetails(student.getId());
+    }
 
     @Transactional(readOnly = true)
     public StudentProfileDetailsResponse getStudentDetails(String studentOrUserId) {

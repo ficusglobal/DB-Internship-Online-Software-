@@ -6,4 +6,7 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public interface DistrictRepository extends JpaRepository<District, Integer> {
+
+    // Duplicate check (case-insensitive)
+    boolean existsByNameIgnoreCase(String name);
 }

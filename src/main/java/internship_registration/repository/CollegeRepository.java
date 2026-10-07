@@ -10,4 +10,9 @@ public interface CollegeRepository extends JpaRepository<College, Integer> {
 
     // Required for the cascading dropdown in the UI
     List<College> findByUniversityIdAndDistrictIdAndIsActiveTrue(Integer universityId, Integer districtId);
+
+    // Duplicate checks (case-insensitive)
+    boolean existsByUniversityIdAndDistrictIdAndNameIgnoreCase(Integer universityId, Integer districtId, String name);
+
+    boolean existsByCodeIgnoreCase(String code);
 }

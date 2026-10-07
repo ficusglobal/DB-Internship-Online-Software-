@@ -9,6 +9,7 @@ import internship_registration.repository.*;
 import internship_registration.security.JwtService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -18,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.Collections;
 
 @Service
@@ -28,18 +30,36 @@ public class AuthService {
     private final CyberCafeRepository cyberCafeRepository;
     private final StudentRepository studentRepository;
     private final InternshipRegistrationRepository internshipRegistrationRepository;
+    private final InternshipBatchRepository internshipBatchRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
 
     // --- UNIVERSAL LOGIN ---
+    @Transactional
     public AuthResponse login(LoginRequest request) {
-        User user = userRepository.findByEmailOrMobileNo(request.getEmailOrMobile(), request.getEmailOrMobile())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+        if (request.getEmailOrMobile() == null || request.getEmailOrMobile().isBlank()
+                || request.getPassword() == null || request.getPassword().isBlank()) {
+            throw new IllegalArgumentException("Email/mobile and password are required");
+        }
 
+        String identifier = request.getEmailOrMobile().trim();
+
+        // Same error for "no such user" and "wrong password" so accounts can't be probed
+        User user = userRepository.findByEmailOrMobileNo(identifier, identifier)
+                .orElseThrow(() -> new BadCredentialsException("Invalid credentials"));
+
+        // Throws BadCredentialsException on a wrong password
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(user.getId(), request.getPassword())
         );
+
+        if (!user.isActive()) {
+            throw new RuntimeException("Your account is disabled. Please contact support.");
+        }
+
+        user.setLastLogin(LocalDateTime.now());
+        userRepository.save(user);
 
         return generateAuthResponse(user);
     }
@@ -48,7 +68,10 @@ public class AuthService {
     @Transactional
     public AuthResponse registerStudent(StudentRegistrationRequest request) {
         // 1. Strict Validation
-        if (!request.getPassword().equals(request.getConfirmPassword())) {
+        if (isBlank(request.getFullName())) {
+            throw new IllegalArgumentException("Full name is required");
+        }
+        if (isBlank(request.getPassword()) || !request.getPassword().equals(request.getConfirmPassword())) {
             throw new RuntimeException("Passwords do not match");
         }
         if (userRepository.existsByEmail(request.getEmail())) {
@@ -60,6 +83,29 @@ public class AuthService {
         if (request.getTermsAccepted() == null || !request.getTermsAccepted()) {
             throw new RuntimeException("You must accept the Terms of Service and Privacy Policy");
         }
+        if (request.getCollegeId() == null) {
+            throw new IllegalArgumentException("College is required");
+        }
+        if (isBlank(request.getDegree()) || isBlank(request.getDepartment()) || isBlank(request.getAcademicSession())) {
+            throw new IllegalArgumentException("Degree, department and academic session are required");
+        }
+        Gender gender;
+        try {
+            gender = Gender.valueOf(request.getGender().trim().toUpperCase());
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Gender must be MALE, FEMALE or OTHER");
+        }
+
+        // Fee comes from the selected batch (it used to be hardcoded to 5000)
+        if (request.getBatchId() == null) {
+            throw new IllegalArgumentException("Internship batch is required");
+        }
+        InternshipBatch batch = internshipBatchRepository.findById(request.getBatchId())
+                .orElseThrow(() -> new IllegalArgumentException("Selected batch does not exist"));
+        if (!Boolean.TRUE.equals(batch.getIsActive())) {
+            throw new IllegalArgumentException("Selected batch is not open for registration");
+        }
+        BigDecimal batchFee = batch.getFee();
 
         // 2. Create Login Account
         User user = User.builder()
@@ -77,7 +123,7 @@ public class AuthService {
                 .user(user)
                 .collegeId(request.getCollegeId())
                 .fatherName(request.getFatherName())
-                .gender(Gender.valueOf(request.getGender().toUpperCase()))
+                .gender(gender)
                 .degree(request.getDegree())
                 .department(request.getDepartment())
                 .academicSession(request.getAcademicSession())
@@ -103,9 +149,9 @@ public class AuthService {
                 .batchId(request.getBatchId())
                 .termsAccepted(request.getTermsAccepted())
                 .status(RegistrationStatus.REGISTERED)
-                .courseFee(BigDecimal.valueOf(5000.00))
+                .courseFee(batchFee)
                 .discountAmount(BigDecimal.ZERO)
-                .payableAmount(BigDecimal.valueOf(5000.00))
+                .payableAmount(batchFee)
                 .isCertificateProvided(false)
                 .build();
         internshipRegistrationRepository.save(registration);
@@ -116,7 +162,7 @@ public class AuthService {
     // --- CYBER CAFE REGISTRATION ---
     @Transactional
     public AuthResponse registerCyberCafe(CyberCafeRegisterRequest request) {
-        if (!request.getPassword().equals(request.getConfirmPassword())) {
+        if (isBlank(request.getPassword()) || !request.getPassword().equals(request.getConfirmPassword())) {
             throw new RuntimeException("Passwords do not match");
         }
         if (userRepository.existsByEmail(request.getEmail())) {
@@ -173,6 +219,10 @@ public class AuthService {
         userRepository.save(user);
 
         return generateAuthResponse(user);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private AuthResponse generateAuthResponse(User user) {

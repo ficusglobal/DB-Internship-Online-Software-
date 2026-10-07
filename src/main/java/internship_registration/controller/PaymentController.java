@@ -8,6 +8,8 @@ import internship_registration.service.PaymentService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -19,8 +21,12 @@ public class PaymentController {
     private final PaymentService paymentService;
 
     @PostMapping("/create-order")
-    public ResponseEntity<CreateOrderResponse> createOrder(@Valid @RequestBody CreateOrderRequest request) throws Exception {
-        CreateOrderResponse response = paymentService.createOrder(request);
+    public ResponseEntity<CreateOrderResponse> createOrder(
+            @Valid @RequestBody CreateOrderRequest request, Authentication authentication) throws Exception {
+        boolean isAdmin = authentication.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .anyMatch(a -> a.equals("SUPER_ADMIN") || a.equals("UNIVERSITY_ADMIN"));
+        CreateOrderResponse response = paymentService.createOrder(request, authentication.getName(), isAdmin);
         return ResponseEntity.ok(response);
     }
 

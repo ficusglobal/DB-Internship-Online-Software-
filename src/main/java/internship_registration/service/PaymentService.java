@@ -9,6 +9,7 @@ import internship_registration.dto.PaymentVerificationRequest;
 import internship_registration.dto.PaymentVerificationResponse;
 import internship_registration.entity.InternshipRegistration;
 import internship_registration.entity.Payment;
+import internship_registration.entity.User;
 import internship_registration.entity.enums.RegistrationStatus;
 import internship_registration.repository.InternshipRegistrationRepository;
 import internship_registration.repository.PaymentRepository;
@@ -16,10 +17,13 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.EnumSet;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -39,17 +43,41 @@ public class PaymentService {
     @Value("${razorpay.webhook.secret:}")
     private String webhookSecret;
 
+    // Statuses in which the fee has already been paid (or the registration is closed)
+    private static final Set<RegistrationStatus> NOT_PAYABLE_STATUSES = EnumSet.of(
+            RegistrationStatus.ENROLLED, RegistrationStatus.IN_PROGRESS,
+            RegistrationStatus.COMPLETED, RegistrationStatus.CANCELLED);
+
     @Transactional
-    public CreateOrderResponse createOrder(CreateOrderRequest request) throws Exception {
+    public CreateOrderResponse createOrder(CreateOrderRequest request, String callerUserId, boolean callerIsAdmin) throws Exception {
         InternshipRegistration registration = registrationRepository.findById(request.getRegistrationId())
                 .orElseThrow(() -> new IllegalArgumentException("Registration not found: " + request.getRegistrationId()));
 
-        BigDecimal amount = BigDecimal.valueOf(5000.00);
+        // Only the student who owns the registration, the cyber cafe that registered them, or an admin
+        if (!callerIsAdmin && !canAccess(registration, callerUserId)) {
+            throw new AccessDeniedException("You do not have access to this registration");
+        }
+
+        // Payment opens only after the student's email has been verified with the OTP
+        User studentUser = registration.getStudent() != null ? registration.getStudent().getUser() : null;
+        if (studentUser == null || !studentUser.isEmailVerified()) {
+            throw new IllegalArgumentException("Please verify the student's email address before making the payment");
+        }
+
+        if (registration.getStatus() != null && NOT_PAYABLE_STATUSES.contains(registration.getStatus())) {
+            throw new IllegalArgumentException("This registration is not payable (status: " + registration.getStatus() + ")");
+        }
+
+        // Amount comes from the registration (set from the batch fee), not a hardcoded number
+        BigDecimal amount = registration.getPayableAmount();
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException("Payable amount for this registration is not valid");
+        }
         String currency = "INR";
         String receiptNumber = "RCPT-" + System.currentTimeMillis();
 
         JSONObject orderRequest = new JSONObject();
-        orderRequest.put("amount", amount.multiply(BigDecimal.valueOf(100)).intValue());
+        orderRequest.put("amount", amount.multiply(BigDecimal.valueOf(100)).longValue()); // paise
         orderRequest.put("currency", currency);
         orderRequest.put("receipt", receiptNumber);
 
@@ -102,6 +130,14 @@ public class PaymentService {
             Payment payment = paymentRepository.findByRazorpayOrderId(request.getRazorpayOrderId())
                     .orElseThrow(() -> new IllegalArgumentException("Payment record not found for order: " + request.getRazorpayOrderId()));
 
+            if (!payment.getRegistrationId().equals(request.getRegistrationId())) {
+                return PaymentVerificationResponse.builder()
+                        .status("FAILED")
+                        .verified(false)
+                        .message("Payment does not belong to this registration")
+                        .build();
+            }
+
             payment.setRazorpayPaymentId(request.getRazorpayPaymentId());
             payment.setRazorpaySignature(request.getRazorpaySignature());
             payment.setStatus("PAID");
@@ -130,6 +166,9 @@ public class PaymentService {
      */
     @Transactional
     public void handleWebhookEvent(String rawPayload, String signature) {
+        if (webhookSecret == null || webhookSecret.isBlank()) {
+            throw new IllegalStateException("Razorpay webhook secret is not configured");
+        }
         try {
             // Built-in Razorpay HMAC-SHA256 signature verification
             boolean isValid = Utils.verifyWebhookSignature(rawPayload, signature, webhookSecret);
@@ -183,12 +222,19 @@ public class PaymentService {
 
     private void updateRegistrationConfirmed(String registrationId) {
         registrationRepository.findById(registrationId).ifPresent(reg -> {
-            try {
-                reg.setStatus(RegistrationStatus.valueOf("CONFIRMED"));
-            } catch (IllegalArgumentException e) {
-                reg.setStatus(RegistrationStatus.values()[RegistrationStatus.values().length - 1]);
+            if (reg.getStatus() == RegistrationStatus.REGISTERED
+                    || reg.getStatus() == RegistrationStatus.PAYMENT_PENDING) {
+                reg.setStatus(RegistrationStatus.ENROLLED);
+                registrationRepository.save(reg);
             }
-            registrationRepository.save(reg);
         });
+    }
+
+    private boolean canAccess(InternshipRegistration reg, String userId) {
+        boolean isOwner = reg.getStudent() != null && reg.getStudent().getUser() != null
+                && userId.equals(reg.getStudent().getUser().getId());
+        boolean isRegisteringCafe = reg.getCyberCafe() != null && reg.getCyberCafe().getUser() != null
+                && userId.equals(reg.getCyberCafe().getUser().getId());
+        return isOwner || isRegisteringCafe;
     }
 }

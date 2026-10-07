@@ -10,4 +10,9 @@ public interface UniversityRepository extends JpaRepository<University, Integer>
 
     // Required to populate the University dropdown
     List<University> findAllByIsActiveTrue();
+
+    // Duplicate checks (case-insensitive)
+    boolean existsByNameIgnoreCase(String name);
+
+    boolean existsByCodeIgnoreCase(String code);
 }

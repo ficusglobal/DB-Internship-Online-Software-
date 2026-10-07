@@ -2,6 +2,7 @@ package internship_registration.service;
 
 import internship_registration.dto.*;
 import internship_registration.entity.*;
+import internship_registration.exception.DuplicateResourceException;
 import internship_registration.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -32,17 +33,33 @@ public class MasterDataService {
 
     // --- POST METHODS FOR ADMIN TO CREATE UNIVERSITY, DISTRICT AND COLLEGE ---
     public University createUniversity(UniversityRequest request) {
+        String name = requireText(request.getName(), "University name");
+        String code = requireText(request.getCode(), "University code");
+
+        if (universityRepository.existsByNameIgnoreCase(name)) {
+            throw new DuplicateResourceException("University already exists: " + name);
+        }
+        if (universityRepository.existsByCodeIgnoreCase(code)) {
+            throw new DuplicateResourceException("A university with code '" + code + "' already exists");
+        }
+
         University university = University.builder()
-                .name(request.getName())
-                .code(request.getCode())
+                .name(name)
+                .code(code)
                 .isActive(true)
                 .build();
         return universityRepository.save(university);
     }
 
     public District createDistrict(DistrictRequest request) {
+        String name = requireText(request.getName(), "District name");
+
+        if (districtRepository.existsByNameIgnoreCase(name)) {
+            throw new DuplicateResourceException("District already exists: " + name);
+        }
+
         District district = District.builder()
-                .name(request.getName())
+                .name(name)
                 .build();
         return districtRepository.save(district);
     }
@@ -53,11 +70,23 @@ public class MasterDataService {
         District district = districtRepository.findById(request.getDistrictId())
                 .orElseThrow(() -> new RuntimeException("District not found"));
 
+        String name = requireText(request.getName(), "College name");
+        // A blank code is stored as NULL (several colleges may have no code yet, but codes can't repeat)
+        String code = (request.getCode() == null || request.getCode().isBlank()) ? null : request.getCode().trim();
+
+        if (collegeRepository.existsByUniversityIdAndDistrictIdAndNameIgnoreCase(
+                university.getId(), district.getId(), name)) {
+            throw new DuplicateResourceException("College already exists in this university and district: " + name);
+        }
+        if (code != null && collegeRepository.existsByCodeIgnoreCase(code)) {
+            throw new DuplicateResourceException("A college with code '" + code + "' already exists");
+        }
+
         College college = College.builder()
                 .university(university)
                 .district(district)
-                .name(request.getName())
-                .code(request.getCode())
+                .name(name)
+                .code(code)
                 .addressLine1(request.getAddressLine1())
                 .city(request.getCity())
                 .state(request.getState())
@@ -65,6 +94,13 @@ public class MasterDataService {
                 .isActive(true)
                 .build();
         return collegeRepository.save(college);
+    }
+
+    private String requireText(String value, String label) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(label + " is required");
+        }
+        return value.trim();
     }
 
     // --- GET METHODS FOR COURSES AND BATCHES ---

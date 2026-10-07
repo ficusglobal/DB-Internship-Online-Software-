@@ -29,6 +29,32 @@ import java.util.NoSuchElementException;
 @Slf4j
 public class GlobalExceptionHandler {
 
+    // 0. OTP failures: invalid/expired code (400) or too many attempts (429)
+    @ExceptionHandler(OtpException.class)
+    public ResponseEntity<ErrorResponse> handleOtpException(OtpException ex) {
+        ErrorResponse response = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(ex.getStatus().value())
+                .error("OTP Verification Failed")
+                .message(ex.getMessage())
+                .build();
+
+        return new ResponseEntity<>(response, ex.getStatus());
+    }
+
+    // 0b. Duplicate master data, e.g. a university/district/college that already exists (HTTP 409)
+    @ExceptionHandler(DuplicateResourceException.class)
+    public ResponseEntity<ErrorResponse> handleDuplicateResource(DuplicateResourceException ex) {
+        ErrorResponse response = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.CONFLICT.value())
+                .error("Duplicate Entry")
+                .message(ex.getMessage())
+                .build();
+
+        return new ResponseEntity<>(response, HttpStatus.CONFLICT);
+    }
+
     // 1. Handles @Valid / DTO field validation failures (HTTP 400)
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidationExceptions(MethodArgumentNotValidException ex) {
