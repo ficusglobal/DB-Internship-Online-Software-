@@ -36,7 +36,11 @@ public class User extends BaseEntity {
     private Role role;
 
     @Column(name = "is_active", nullable = false)
+    @Builder.Default
     private boolean isActive = true;
+
+    @Column(name = "email_verified", nullable = false)
+    private boolean emailVerified;
 
     @Column(name = "last_login")
     private LocalDateTime lastLogin;

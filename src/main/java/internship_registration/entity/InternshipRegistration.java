@@ -34,6 +34,7 @@ public class InternshipRegistration extends BaseEntity {
     private String registrationNumber;
 
     @Column(name = "terms_accepted", nullable = false)
+    @Builder.Default
     private Boolean termsAccepted = true;
 
     // CONSENT WORKFLOW
@@ -42,11 +43,13 @@ public class InternshipRegistration extends BaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "consent_status")
+    @Builder.Default
     private ConsentStatus consentStatus = ConsentStatus.PENDING;
 
     // UPDATED: Using your provided enum
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
+    @Builder.Default
     private RegistrationStatus status = RegistrationStatus.REGISTERED;
 
     @Column(name = "course_fee", nullable = false, precision = 10, scale = 2)
