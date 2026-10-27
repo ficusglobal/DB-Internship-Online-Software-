@@ -5,6 +5,7 @@ import internship_registration.entity.enums.RegistrationStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "internship_registrations")
@@ -45,6 +46,18 @@ public class InternshipRegistration extends BaseEntity {
     @Column(name = "consent_status")
     @Builder.Default
     private ConsentStatus consentStatus = ConsentStatus.PENDING;
+
+    // Why the admin rejected the consent letter (shown to the student); cleared when a new file is uploaded
+    @Column(name = "consent_rejection_reason", length = 500)
+    private String consentRejectionReason;
+
+    // When the admin last approved or rejected the consent letter
+    @Column(name = "consent_reviewed_at")
+    private LocalDateTime consentReviewedAt;
+
+    // When the WhatsApp group link was emailed to the student (NULL = not sent yet)
+    @Column(name = "whatsapp_link_sent_at")
+    private LocalDateTime whatsappLinkSentAt;
 
     // UPDATED: Using your provided enum
     @Enumerated(EnumType.STRING)

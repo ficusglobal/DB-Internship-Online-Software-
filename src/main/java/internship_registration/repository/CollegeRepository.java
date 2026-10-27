@@ -15,4 +15,22 @@ public interface CollegeRepository extends JpaRepository<College, Integer> {
     boolean existsByUniversityIdAndDistrictIdAndNameIgnoreCase(Integer universityId, Integer districtId, String name);
 
     boolean existsByCodeIgnoreCase(String code);
+
+    // Same checks for updates: ignore the record being edited
+    boolean existsByUniversityIdAndDistrictIdAndNameIgnoreCaseAndIdNot(
+            Integer universityId, Integer districtId, String name, Integer id);
+
+    boolean existsByCodeIgnoreCaseAndIdNot(String code, Integer id);
+
+    // Admin lists (active and inactive)
+    List<College> findByUniversityId(Integer universityId);
+
+    List<College> findByDistrictId(Integer districtId);
+
+    List<College> findByUniversityIdAndDistrictId(Integer universityId, Integer districtId);
+
+    // Used to block deleting a university or district that still has colleges
+    long countByUniversityId(Integer universityId);
+
+    long countByDistrictId(Integer districtId);
 }

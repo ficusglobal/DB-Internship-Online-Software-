@@ -13,4 +13,7 @@ public interface StudentRepository extends JpaRepository<Student, String> {
     Optional<Student> findByUser_Id(String userId);
 
     Optional<Student> findByUser(User user);
+
+    // Used to block deleting a college that still has students
+    long countByCollegeId(Integer collegeId);
 }

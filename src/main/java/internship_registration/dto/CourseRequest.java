@@ -11,4 +11,5 @@ public class CourseRequest {
     private Integer practicalDurationHours;
     private Integer reportPreparationHours;
     private Integer totalDurationHours;
+    private Boolean isActive;
 }

@@ -6,5 +6,6 @@ import lombok.Data;
 public class UniversityRequest {
     private String name;
     private String code;
-}
 
+    private Boolean active;
+}

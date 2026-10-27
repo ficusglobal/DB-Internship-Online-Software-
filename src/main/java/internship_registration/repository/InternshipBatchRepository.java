@@ -5,4 +5,9 @@ import java.util.List;
 
 public interface InternshipBatchRepository extends JpaRepository<InternshipBatch, Integer> {
     List<InternshipBatch> findByCourseIdAndIsActiveTrue(Integer courseId);
+
+    // Admin list (active and inactive) and delete check
+    List<InternshipBatch> findByCourseId(Integer courseId);
+
+    long countByCourseId(Integer courseId);
 }

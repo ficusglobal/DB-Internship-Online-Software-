@@ -15,4 +15,9 @@ public interface UniversityRepository extends JpaRepository<University, Integer>
     boolean existsByNameIgnoreCase(String name);
 
     boolean existsByCodeIgnoreCase(String code);
+
+    // Same checks for updates: ignore the record being edited
+    boolean existsByNameIgnoreCaseAndIdNot(String name, Integer id);
+
+    boolean existsByCodeIgnoreCaseAndIdNot(String code, Integer id);
 }

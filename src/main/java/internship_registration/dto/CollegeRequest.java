@@ -12,4 +12,5 @@ public class CollegeRequest {
     private String city;
     private String state;
     private String pincode;
+    private Boolean active;
 }

@@ -75,6 +75,73 @@ public class EmailService {
         }
     }
 
+    /**
+     * Sent after the payment is confirmed. Includes the WhatsApp group link when a group exists for the
+     * student's college and batch; otherwise it says the link will follow by email.
+     */
+    @Async
+    public void sendEnrollmentEmail(String to, String name, String courseName, String batchName,
+                                    String groupName, String groupUrl) {
+        try {
+            String displayName = (name == null || name.isBlank()) ? "there" : name;
+            boolean hasLink = groupUrl != null && !groupUrl.isBlank();
+
+            String plain = "Hello " + displayName + ",\n\n"
+                    + "Your payment was successful and your registration is confirmed.\n"
+                    + "Course: " + courseName + "\nBatch: " + batchName + "\n\n"
+                    + (hasLink
+                    ? "Join your WhatsApp group here:\n" + groupUrl + "\n\n"
+                    + "Group members can see each other's phone numbers.\n\n"
+                    : "Your WhatsApp group link will be emailed to you as soon as the group is ready.\n\n")
+                    + fromName;
+
+            String html = "<div style=\"font-family:Arial,sans-serif;max-width:520px;margin:auto;\">"
+                    + "<p>Hello " + HtmlUtils.htmlEscape(displayName) + ",</p>"
+                    + "<p><b>Your payment was successful and your registration is confirmed.</b></p>"
+                    + "<p>Course: " + HtmlUtils.htmlEscape(courseName) + "<br>Batch: "
+                    + HtmlUtils.htmlEscape(batchName) + "</p>"
+                    + (hasLink
+                    ? "<p>Join your WhatsApp group"
+                    + (groupName != null && !groupName.isBlank() ? " <b>" + HtmlUtils.htmlEscape(groupName) + "</b>" : "")
+                    + ":</p><p><a href=\"" + HtmlUtils.htmlEscape(groupUrl) + "\" style=\"display:inline-block;"
+                    + "background:#16a34a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;\">"
+                    + "Join WhatsApp group</a></p>"
+                    + "<p style=\"color:#6b7280;font-size:13px;\">Group members can see each other's phone numbers.</p>"
+                    : "<p>Your WhatsApp group link will be emailed to you as soon as the group is ready.</p>")
+                    + "<p>" + HtmlUtils.htmlEscape(fromName) + "</p>"
+                    + "</div>";
+
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom(from, fromName);
+            helper.setTo(to);
+            helper.setSubject("Payment successful - your internship registration is confirmed");
+            helper.setText(plain, html);
+            mailSender.send(message);
+
+            log.info("Enrollment email sent to {} (group link included: {})", mask(to), hasLink);
+        } catch (Exception e) {
+            log.error("Failed to send the enrollment email to {}: {}", mask(to), e.getMessage());
+        }
+    }
+
+    /** Short plain-text notice, for example to an admin. Failures are only logged. */
+    @Async
+    public void sendNotice(String to, String subject, String text) {
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, false, "UTF-8");
+            helper.setFrom(from, fromName);
+            helper.setTo(to);
+            helper.setSubject(subject);
+            helper.setText(text, false);
+            mailSender.send(message);
+            log.info("Notice email sent to {}", mask(to));
+        } catch (Exception e) {
+            log.error("Failed to send the notice email to {}: {}", mask(to), e.getMessage());
+        }
+    }
+
     private String mask(String email) {
         int at = email.indexOf('@');
         if (at <= 1) return "***" + (at >= 0 ? email.substring(at) : "");

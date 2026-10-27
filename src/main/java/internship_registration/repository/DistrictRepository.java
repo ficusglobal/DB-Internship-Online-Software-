@@ -9,4 +9,6 @@ public interface DistrictRepository extends JpaRepository<District, Integer> {
 
     // Duplicate check (case-insensitive)
     boolean existsByNameIgnoreCase(String name);
+
+    boolean existsByNameIgnoreCaseAndIdNot(String name, Integer id);
 }
