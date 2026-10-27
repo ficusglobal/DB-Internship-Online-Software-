@@ -10,6 +10,7 @@ import internship_registration.dto.PaymentVerificationResponse;
 import internship_registration.entity.InternshipRegistration;
 import internship_registration.entity.Payment;
 import internship_registration.entity.User;
+import internship_registration.entity.enums.ConsentStatus;
 import internship_registration.entity.enums.RegistrationStatus;
 import internship_registration.repository.InternshipRegistrationRepository;
 import internship_registration.repository.PaymentRepository;
@@ -20,6 +21,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.util.EnumSet;
@@ -33,6 +36,7 @@ public class PaymentService {
     private final RazorpayClient razorpayClient;
     private final PaymentRepository paymentRepository;
     private final InternshipRegistrationRepository registrationRepository;
+    private final EnrollmentNotificationService enrollmentNotificationService;
 
     @Value("${razorpay.key.id}")
     private String keyId;
@@ -62,6 +66,15 @@ public class PaymentService {
         User studentUser = registration.getStudent() != null ? registration.getStudent().getUser() : null;
         if (studentUser == null || !studentUser.isEmailVerified()) {
             throw new IllegalArgumentException("Please verify the student's email address before making the payment");
+        }
+
+        // Payment opens only after the consent letter has been uploaded (and was not rejected)
+        if (registration.getConsentLetterUrl() == null || registration.getConsentLetterUrl().isBlank()) {
+            throw new IllegalArgumentException("Please upload the consent letter before making the payment");
+        }
+        if (registration.getConsentStatus() == ConsentStatus.REJECTED) {
+            throw new IllegalArgumentException(
+                    "The consent letter was rejected. Please upload a new one before making the payment");
         }
 
         if (registration.getStatus() != null && NOT_PAYABLE_STATUSES.contains(registration.getStatus())) {
@@ -226,8 +239,31 @@ public class PaymentService {
                     || reg.getStatus() == RegistrationStatus.PAYMENT_PENDING) {
                 reg.setStatus(RegistrationStatus.ENROLLED);
                 registrationRepository.save(reg);
+                sendEnrollmentMailAfterCommit(registrationId);
             }
         });
+    }
+
+    // The success email (with the WhatsApp group link) goes out only after the payment is safely committed,
+    // and a mail problem can never undo the payment.
+    private void sendEnrollmentMailAfterCommit(String registrationId) {
+        Runnable task = () -> {
+            try {
+                enrollmentNotificationService.notifyEnrolled(registrationId);
+            } catch (Exception e) {
+                log.error("Could not send the enrollment email for registration {}: {}", registrationId, e.getMessage());
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    task.run();
+                }
+            });
+        } else {
+            task.run();
+        }
     }
 
     private boolean canAccess(InternshipRegistration reg, String userId) {
