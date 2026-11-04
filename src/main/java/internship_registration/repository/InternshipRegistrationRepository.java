@@ -4,6 +4,8 @@ import internship_registration.entity.InternshipRegistration;
 import internship_registration.entity.Student;
 import internship_registration.entity.enums.ConsentStatus;
 import internship_registration.entity.enums.RegistrationStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -35,4 +37,30 @@ public interface InternshipRegistrationRepository extends JpaRepository<Internsh
     List<InternshipRegistration> findPaidByBatchAndCollege(@Param("batchId") Integer batchId,
                                                            @Param("collegeId") Integer collegeId,
                                                            @Param("statuses") Collection<RegistrationStatus> statuses);
+
+    // Admin student list. Every filter is optional (pass null to skip it); statuses is never empty.
+    @Query(value = "select r from InternshipRegistration r "
+            + "join fetch r.student s join fetch s.user u left join fetch r.cyberCafe cc "
+            + "where r.status in :statuses "
+            + "and (:collegeId is null or s.collegeId = :collegeId) "
+            + "and (:universityId is null or s.collegeId in "
+            + "     (select c.id from College c where c.university.id = :universityId)) "
+            + "and (:batchId is null or r.batchId = :batchId) "
+            + "and (:courseId is null or r.batchId in "
+            + "     (select b.id from InternshipBatch b where b.course.id = :courseId)) "
+            + "order by r.createdAt desc",
+            countQuery = "select count(r) from InternshipRegistration r join r.student s "
+                    + "where r.status in :statuses "
+                    + "and (:collegeId is null or s.collegeId = :collegeId) "
+                    + "and (:universityId is null or s.collegeId in "
+                    + "     (select c.id from College c where c.university.id = :universityId)) "
+                    + "and (:batchId is null or r.batchId = :batchId) "
+                    + "and (:courseId is null or r.batchId in "
+                    + "     (select b.id from InternshipBatch b where b.course.id = :courseId))")
+    Page<InternshipRegistration> searchForAdmin(@Param("universityId") Integer universityId,
+                                                @Param("collegeId") Integer collegeId,
+                                                @Param("courseId") Integer courseId,
+                                                @Param("batchId") Integer batchId,
+                                                @Param("statuses") Collection<RegistrationStatus> statuses,
+                                                Pageable pageable);
 }

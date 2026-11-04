@@ -9,6 +9,7 @@ import internship_registration.entity.Student;
 import internship_registration.entity.StudentAcceptanceLetter;
 import internship_registration.entity.University;
 import internship_registration.entity.User;
+import internship_registration.entity.enums.Department;
 import internship_registration.entity.enums.RegistrationStatus;
 import internship_registration.repository.CollegeRepository;
 import internship_registration.repository.InternshipBatchRepository;
@@ -206,7 +207,8 @@ public class AcceptanceLetterService {
                 .studentRegistrationNumber(student != null ? student.getRegistrationNumber() : null)
                 .collegeRollNumber(student != null ? student.getCollegeRollNumber() : null)
                 .degree(student != null ? student.getDegree() : null)
-                .department(student != null ? student.getDepartment() : null)
+                .department(student != null ? Department.display(student.getDepartment(), student.getDepartmentOther()) : null)
+                .semester(student != null ? student.getSemester() : null)
                 .majorSubject(student != null ? student.getMajorSubject() : null)
                 .academicSession(l.getAcademicSession())
                 // college / university

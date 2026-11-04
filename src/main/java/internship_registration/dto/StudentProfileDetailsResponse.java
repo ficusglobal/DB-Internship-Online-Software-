@@ -19,8 +19,12 @@ public class StudentProfileDetailsResponse {
     private String studentRegistrationNumber;
     private String collegeRollNumber;
     private String degree;
-    private String department;
+    private String department;       // code, e.g. BSC
+    private String departmentName;   // label, e.g. B.Sc (or the typed name for Others)
+    private String departmentOther;  // typed name when department is UG_OTHERS / PG_OTHERS
+    private Integer semester;
     private String academicSession;
+    private String majorSubject;
 
     // College Details
     private Integer collegeId;

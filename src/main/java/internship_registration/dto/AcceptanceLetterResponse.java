@@ -32,7 +32,8 @@ public class AcceptanceLetterResponse {
     private String studentRegistrationNumber;   // university registration no. entered by the student
     private String collegeRollNumber;
     private String degree;
-    private String department;
+    private String department;                  // label for printing, e.g. B.Sc
+    private Integer semester;
     private String majorSubject;
     private String academicSession;
 

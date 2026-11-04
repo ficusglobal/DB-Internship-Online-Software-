@@ -2,6 +2,7 @@ package internship_registration.service;
 
 import internship_registration.dto.StudentProfileDetailsResponse;
 import internship_registration.entity.*;
+import internship_registration.entity.enums.Department;
 import internship_registration.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.AccessDeniedException;
@@ -89,7 +90,11 @@ public class StudentService {
                 .collegeRollNumber(student.getCollegeRollNumber())
                 .degree(student.getDegree())
                 .department(student.getDepartment())
+                .departmentName(Department.display(student.getDepartment(), student.getDepartmentOther()))
+                .departmentOther(student.getDepartmentOther())
+                .semester(student.getSemester())
                 .academicSession(student.getAcademicSession())
+                .majorSubject(student.getMajorSubject())
                 // College details
                 .collegeId(student.getCollegeId())
                 .collegeName(college != null ? college.getName() : null)
