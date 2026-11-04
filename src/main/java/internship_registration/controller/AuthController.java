@@ -26,11 +26,11 @@ public class AuthController {
         return ResponseEntity.ok(authService.login(request));
     }
 
+    // The email is verified BEFORE this call (POST /api/auth/register/email/send-otp and /verify-otp),
+    // so no OTP is sent after the account is created.
     @PostMapping("/register/student")
     public ResponseEntity<AuthResponse> registerStudent(@Valid @RequestBody StudentRegistrationRequest request) {
-        AuthResponse response = authService.registerStudent(request);
-        sendVerificationEmailQuietly(response.getEmail());
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(authService.registerStudent(request));
     }
 
     @PostMapping("/register/cybercafe")

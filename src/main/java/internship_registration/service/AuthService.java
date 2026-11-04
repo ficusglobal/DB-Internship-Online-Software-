@@ -2,6 +2,8 @@ package internship_registration.service;
 
 import internship_registration.dto.*;
 import internship_registration.entity.*;
+import internship_registration.entity.enums.DegreeLevel;
+import internship_registration.entity.enums.Department;
 import internship_registration.entity.enums.Gender;
 import internship_registration.entity.enums.RegistrationStatus;
 import internship_registration.entity.enums.Role;
@@ -31,6 +33,11 @@ public class AuthService {
     private final StudentRepository studentRepository;
     private final InternshipRegistrationRepository internshipRegistrationRepository;
     private final InternshipBatchRepository internshipBatchRepository;
+    private final CollegeRepository collegeRepository;
+    private final AcademicSessionRepository academicSessionRepository;
+    private final MajorSubjectRepository majorSubjectRepository;
+    private final RegistrationCheckService registrationCheckService;
+    private final RegistrationEmailVerificationService emailVerificationService;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
@@ -64,31 +71,31 @@ public class AuthService {
         return generateAuthResponse(user);
     }
 
-    // --- UNIFIED STUDENT REGISTRATION ---
+    // --- STUDENT REGISTRATION (email must already be verified with the OTP) ---
     @Transactional
     public AuthResponse registerStudent(StudentRegistrationRequest request) {
-        // 1. Strict Validation
+        // 1. Basic checks
         if (isBlank(request.getFullName())) {
             throw new IllegalArgumentException("Full name is required");
         }
         if (isBlank(request.getPassword()) || !request.getPassword().equals(request.getConfirmPassword())) {
-            throw new RuntimeException("Passwords do not match");
-        }
-        if (userRepository.existsByEmail(request.getEmail())) {
-            throw new RuntimeException("Email already registered");
-        }
-        if (userRepository.existsByMobileNo(request.getMobileNo())) {
-            throw new RuntimeException("Mobile number already registered");
+            throw new IllegalArgumentException("Passwords do not match");
         }
         if (request.getTermsAccepted() == null || !request.getTermsAccepted()) {
-            throw new RuntimeException("You must accept the Terms of Service and Privacy Policy");
+            throw new IllegalArgumentException("You must accept the Terms of Service and Privacy Policy");
         }
-        if (request.getCollegeId() == null) {
-            throw new IllegalArgumentException("College is required");
+
+        String email = request.getEmail().trim();
+        String mobileNo = request.getMobileNo().trim();
+        String registrationNumber = blankToNull(request.getRegistrationNumber());
+        String collegeRollNumber = blankToNull(request.getCollegeRollNumber());
+        if (registrationNumber != null) {
+            registrationNumber = RegistrationCheckService.digitsOnly(registrationNumber, "Registration number");
         }
-        if (isBlank(request.getDegree()) || isBlank(request.getDepartment()) || isBlank(request.getAcademicSession())) {
-            throw new IllegalArgumentException("Degree, department and academic session are required");
+        if (collegeRollNumber != null) {
+            collegeRollNumber = RegistrationCheckService.digitsOnly(collegeRollNumber, "College roll number");
         }
+
         Gender gender;
         try {
             gender = Gender.valueOf(request.getGender().trim().toUpperCase());
@@ -96,7 +103,59 @@ public class AuthService {
             throw new IllegalArgumentException("Gender must be MALE, FEMALE or OTHER");
         }
 
-        // Fee comes from the selected batch (it used to be hardcoded to 5000)
+        // 2. College
+        if (request.getCollegeId() == null) {
+            throw new IllegalArgumentException("College is required");
+        }
+        College college = collegeRepository.findById(request.getCollegeId())
+                .orElseThrow(() -> new IllegalArgumentException("Selected college does not exist"));
+        if (!college.isActive()) {
+            throw new IllegalArgumentException("Selected college is not open for registration");
+        }
+
+        // 3. Degree (UG/PG), department of that degree, semester within the degree's range
+        DegreeLevel degree = DegreeLevel.parse(request.getDegree());
+        Department department = Department.parse(request.getDepartment());
+        if (department.getDegree() != degree) {
+            throw new IllegalArgumentException(department.getLabel() + " is not a " + degree.name() + " department");
+        }
+        // "Others": the student must type the department name
+        String departmentOther = null;
+        if (department.isOthers()) {
+            departmentOther = blankToNull(request.getDepartmentOther());
+            if (departmentOther == null) {
+                throw new IllegalArgumentException("Please enter your department name");
+            }
+            if (departmentOther.length() > 150) {
+                throw new IllegalArgumentException("Department name can be at most 150 characters");
+            }
+        }
+        Integer semester = request.getSemester();
+        if (semester == null || semester < 1 || semester > degree.getMaxSemester()) {
+            throw new IllegalArgumentException("Semester must be between 1 and " + degree.getMaxSemester()
+                    + " for " + degree.name());
+        }
+
+        // 4. Academic session and major subject from their dropdown tables
+        if (request.getAcademicSessionId() == null) {
+            throw new IllegalArgumentException("Academic session is required");
+        }
+        AcademicSession session = academicSessionRepository.findById(request.getAcademicSessionId())
+                .orElseThrow(() -> new IllegalArgumentException("Selected academic session does not exist"));
+        if (!Boolean.TRUE.equals(session.getIsActive())) {
+            throw new IllegalArgumentException("Selected academic session is not open for registration");
+        }
+
+        if (request.getMajorSubjectId() == null) {
+            throw new IllegalArgumentException("Major subject is required");
+        }
+        MajorSubject subject = majorSubjectRepository.findById(request.getMajorSubjectId())
+                .orElseThrow(() -> new IllegalArgumentException("Selected major subject does not exist"));
+        if (!Boolean.TRUE.equals(subject.getIsActive())) {
+            throw new IllegalArgumentException("Selected major subject is not available");
+        }
+
+        // 5. Batch (the fee comes from the batch)
         if (request.getBatchId() == null) {
             throw new IllegalArgumentException("Internship batch is required");
         }
@@ -107,46 +166,57 @@ public class AuthService {
         }
         BigDecimal batchFee = batch.getFee();
 
-        // 2. Create Login Account
+        // 6. Nothing may be registered already: email, mobile, registration no., roll no. in this college (HTTP 409)
+        registrationCheckService.assertAvailable(email, mobileNo, registrationNumber, collegeRollNumber, college.getId());
+
+        // 7. Email must have been verified with the OTP (the one-time token is used up here)
+        emailVerificationService.consumeToken(request.getEmailVerificationToken(), email);
+
+        // 8. Create login account (email already verified)
         User user = User.builder()
-                .name(request.getFullName())
-                .email(request.getEmail())
-                .mobileNo(request.getMobileNo())
+                .name(request.getFullName().trim())
+                .email(email)
+                .mobileNo(mobileNo)
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
                 .role(Role.STUDENT)
                 .isActive(true)
+                .emailVerified(true)
                 .build();
         user = userRepository.save(user);
 
-        // 3. Create Student Profile (Strictly Academic Info)
+        // 9. Create Student Profile (Strictly Academic Info)
         Student student = Student.builder()
                 .user(user)
-                .collegeId(request.getCollegeId())
-                .fatherName(request.getFatherName())
+                .collegeId(college.getId())
+                .fatherName(blankToNull(request.getFatherName()))
                 .gender(gender)
-                .degree(request.getDegree())
-                .department(request.getDepartment())
-                .academicSession(request.getAcademicSession())
-                .registrationNumber(request.getRegistrationNumber())
-                .collegeRollNumber(request.getCollegeRollNumber())
-                .majorSubject(request.getMajorSubject())
+                .degree(degree.name())
+                .department(department.name())
+                .departmentOther(departmentOther)
+                .semester(semester)
+                .academicSessionId(session.getId())
+                .academicSession(session.getName())
+                .registrationNumber(registrationNumber)
+                .collegeRollNumber(collegeRollNumber)
+                .majorSubjectId(subject.getId())
+                .majorSubject(subject.getName())
                 .isActive(true)
                 .build();
         student = studentRepository.save(student);
 
-        // 4. Cyber Cafe Detection
+        // 10. Cyber Cafe Detection
         CyberCafe registeringCafe = null;
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth != null && auth.isAuthenticated() && !auth.getPrincipal().equals("anonymousUser")) {
+        if (auth != null && auth.isAuthenticated() && !"anonymousUser".equals(auth.getPrincipal())) {
             String loggedInUserId = auth.getName();
             registeringCafe = cyberCafeRepository.findByUserId(loggedInUserId).orElse(null);
         }
 
-        // 5. Create Internship Registration
+        // 11. Create Internship Registration
         InternshipRegistration registration = InternshipRegistration.builder()
                 .student(student)
                 .cyberCafe(registeringCafe)
-                .batchId(request.getBatchId())
+                .batchId(batch.getId())
                 .termsAccepted(request.getTermsAccepted())
                 .status(RegistrationStatus.REGISTERED)
                 .courseFee(batchFee)
@@ -223,6 +293,10 @@ public class AuthService {
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private String blankToNull(String value) {
+        return (value == null || value.isBlank()) ? null : value.trim();
     }
 
     private AuthResponse generateAuthResponse(User user) {

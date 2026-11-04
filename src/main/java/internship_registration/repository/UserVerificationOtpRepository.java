@@ -34,4 +34,40 @@ public interface UserVerificationOtpRepository extends JpaRepository<UserVerific
     int invalidateActive(@Param("userId") String userId,
                          @Param("purpose") OtpPurpose purpose,
                          @Param("now") LocalDateTime now);
+
+    // =====================================================================
+    // BEFORE REGISTRATION (no account yet): rows have user_id NULL and email set
+    // =====================================================================
+
+    // Latest code that can still be entered (row lock so two verify calls can't both use it)
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<UserVerificationOtp> findFirstByEmailAndUserIdIsNullAndPurposeAndUsedAtIsNullOrderByCreatedAtDescIdDesc(
+            String email, OtpPurpose purpose);
+
+    // Latest row of any state, for the resend cooldown
+    Optional<UserVerificationOtp> findFirstByEmailAndUserIdIsNullAndPurposeOrderByCreatedAtDescIdDesc(
+            String email, OtpPurpose purpose);
+
+    long countByEmailAndUserIdIsNullAndPurposeAndCreatedAtAfter(String email, OtpPurpose purpose, LocalDateTime after);
+
+    // Token presented by the registration form
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<UserVerificationOtp> findByVerificationTokenHash(String verificationTokenHash);
+
+    // New code requested: retire the older unused codes of this email
+    @Modifying(flushAutomatically = true)
+    @Query("update UserVerificationOtp o set o.usedAt = :now " +
+            "where o.email = :email and o.userId is null and o.purpose = :purpose and o.usedAt is null")
+    int invalidateActiveByEmail(@Param("email") String email,
+                                @Param("purpose") OtpPurpose purpose,
+                                @Param("now") LocalDateTime now);
+
+    // New code requested: older verification tokens of this email can no longer be used
+    @Modifying(flushAutomatically = true)
+    @Query("update UserVerificationOtp o set o.tokenUsedAt = :now " +
+            "where o.email = :email and o.userId is null and o.purpose = :purpose " +
+            "and o.verificationTokenHash is not null and o.tokenUsedAt is null")
+    int retireTokensByEmail(@Param("email") String email,
+                            @Param("purpose") OtpPurpose purpose,
+                            @Param("now") LocalDateTime now);
 }

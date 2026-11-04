@@ -1,16 +1,21 @@
 package internship_registration.exception;
 
+import com.razorpay.RazorpayException;
 import internship_registration.dto.ErrorResponse;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.MalformedJwtException;
 import io.jsonwebtoken.security.SignatureException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.DisabledException;
+import org.springframework.security.authentication.LockedException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -26,327 +31,278 @@ import org.springframework.web.multipart.support.MissingServletRequestPartExcept
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.LocalDateTime;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 
+/**
+ * Turns every exception into the same JSON shape:
+ * { "timestamp", "status", "error", "message", "validationErrors" (only for field errors) }
+ *
+ * Spring picks the MOST SPECIFIC handler, so e.g. DuplicateResourceException uses its own handler
+ * even though it is also a RuntimeException.
+ */
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
 
-    // 0. OTP failures: invalid/expired code (400) or too many attempts (429)
+    // =====================================================================
+    // APPLICATION EXCEPTIONS
+    // =====================================================================
+
+    // 0. OTP failures: invalid/expired code (400), too many attempts or resend too soon (429)
     @ExceptionHandler(OtpException.class)
     public ResponseEntity<ErrorResponse> handleOtpException(OtpException ex) {
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(ex.getStatus().value())
-                .error("OTP Verification Failed")
-                .message(ex.getMessage())
-                .build();
-
-        return new ResponseEntity<>(response, ex.getStatus());
+        return build(ex.getStatus(), "OTP Verification Failed", ex.getMessage());
     }
 
-    // 0b. Duplicate master data, e.g. a university/district/college that already exists (HTTP 409)
+    // 0b. Duplicate data: email / mobile / registration no. / roll no. / master data that already exists (409)
     @ExceptionHandler(DuplicateResourceException.class)
     public ResponseEntity<ErrorResponse> handleDuplicateResource(DuplicateResourceException ex) {
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.CONFLICT.value())
-                .error("Duplicate Entry")
-                .message(ex.getMessage())
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.CONFLICT);
+        return build(HttpStatus.CONFLICT, "Duplicate Entry", ex.getMessage());
     }
 
-    // 0c. Record is still used by other records, so it cannot be deleted or moved (HTTP 409)
+    // 0c. Record still used by other records, e.g. deleting a session that students use (409)
     @ExceptionHandler(ResourceInUseException.class)
     public ResponseEntity<ErrorResponse> handleResourceInUse(ResourceInUseException ex) {
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.CONFLICT.value())
-                .error("Resource In Use")
-                .message(ex.getMessage())
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.CONFLICT);
+        return build(HttpStatus.CONFLICT, "Resource In Use", ex.getMessage());
     }
 
-    // 1. Handles @Valid / DTO field validation failures (HTTP 400)
+    // =====================================================================
+    // REQUEST PROBLEMS (400 / 404 / 405 / 406 / 413 / 415)
+    // =====================================================================
+
+    // 1. @Valid field validation failures (400) -> validationErrors = { field: message }
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidationExceptions(MethodArgumentNotValidException ex) {
-        Map<String, String> errors = new HashMap<>();
+        Map<String, String> errors = new LinkedHashMap<>();
         for (FieldError error : ex.getBindingResult().getFieldErrors()) {
-            errors.put(error.getField(), error.getDefaultMessage());
+            errors.putIfAbsent(error.getField(), error.getDefaultMessage()); // first message per field
         }
-
         ErrorResponse response = ErrorResponse.builder()
                 .timestamp(LocalDateTime.now())
                 .status(HttpStatus.BAD_REQUEST.value())
                 .error("Validation Failed")
-                .message("One or more input fields are invalid")
+                .message(errors.size() == 1 ? errors.values().iterator().next()
+                        : "One or more input fields are invalid")
                 .validationErrors(errors)
                 .build();
-
         return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
     }
 
-    // 2. Handles Malformed / Unreadable JSON Request Body (HTTP 400)
+    // 2. Missing or malformed JSON body, or a wrong type inside it, e.g. "semester": "five" (400)
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ErrorResponse> handleHttpMessageNotReadable(HttpMessageNotReadableException ex) {
         log.warn("Malformed JSON request received: {}", ex.getMessage());
-
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error("Malformed Request")
-                .message("Request body is missing or malformed JSON format")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+        return build(HttpStatus.BAD_REQUEST, "Malformed Request",
+                "Request body is missing, is not valid JSON, or a field has the wrong type");
     }
 
-    // 3. Handles Missing Query Parameter e.g., ?universityId= missing (HTTP 400)
+    // 3. Missing query parameter, e.g. ?degree= missing (400)
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public ResponseEntity<ErrorResponse> handleMissingParams(MissingServletRequestParameterException ex) {
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error("Missing Query Parameter")
-                .message("Required query parameter '" + ex.getParameterName() + "' is missing")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+        return build(HttpStatus.BAD_REQUEST, "Missing Query Parameter",
+                "Required query parameter '" + ex.getParameterName() + "' is missing");
     }
 
-    // 4. Handles URL Type Mismatches e.g. passing a string into an Integer ID (HTTP 400)
+    // 4. Wrong type in the URL, e.g. a word where an Integer id is expected (400)
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
-        String message = String.format("Parameter '%s' should be of type '%s'",
-                ex.getName(),
-                ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "unknown");
-
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error("Type Mismatch")
-                .message(message)
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+        String type = ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "unknown";
+        return build(HttpStatus.BAD_REQUEST, "Type Mismatch",
+                String.format("Parameter '%s' should be of type '%s'", ex.getName(), type));
     }
 
-    // 5. Handles Database Unique Key Violations e.g., duplicate email/mobile/order_id (HTTP 409)
-    @ExceptionHandler(DataIntegrityViolationException.class)
-    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
-        log.warn("Database constraint violation: {}", ex.getMostSpecificCause().getMessage());
-
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.CONFLICT.value())
-                .error("Conflict / Duplicate Entry")
-                .message("The record you are attempting to create already exists (e.g. duplicate email, mobile number, or order ID).")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.CONFLICT);
-    }
-
-    // 6. Handles Entity Not Found Lookups (HTTP 404)
-    @ExceptionHandler(NoSuchElementException.class)
-    public ResponseEntity<ErrorResponse> handleNotFound(NoSuchElementException ex) {
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.NOT_FOUND.value())
-                .error("Resource Not Found")
-                .message(ex.getMessage() != null ? ex.getMessage() : "Requested resource was not found")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.NOT_FOUND);
-    }
-
-    // 7. Handles Missing Required Headers (HTTP 400)
+    // 5. Missing required header, e.g. X-Razorpay-Signature on the webhook (400)
     @ExceptionHandler(MissingRequestHeaderException.class)
     public ResponseEntity<ErrorResponse> handleMissingHeader(MissingRequestHeaderException ex) {
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error("Missing Header")
-                .message("Required header '" + ex.getHeaderName() + "' is not present")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+        return build(HttpStatus.BAD_REQUEST, "Missing Header",
+                "Required header '" + ex.getHeaderName() + "' is not present");
     }
 
-    // 8. Handles JWT Token Exceptions (HTTP 401)
-    @ExceptionHandler({ExpiredJwtException.class, SignatureException.class, MalformedJwtException.class})
-    public ResponseEntity<ErrorResponse> handleJwtExceptions(Exception ex) {
-        log.warn("JWT validation issue: {}", ex.getMessage());
-
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.UNAUTHORIZED.value())
-                .error("Invalid JWT Token")
-                .message("Token has expired or is invalid. Please log in again.")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.UNAUTHORIZED);
+    // 6. The file part is missing from a multipart request (400)
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<ErrorResponse> handleMissingPart(MissingServletRequestPartException ex) {
+        return build(HttpStatus.BAD_REQUEST, "Missing File",
+                "Attach the file as the form field '" + ex.getRequestPartName() + "'");
     }
 
-    // 9. Handles Authentication Failures e.g., wrong password (HTTP 401)
-    @ExceptionHandler(BadCredentialsException.class)
-    public ResponseEntity<ErrorResponse> handleBadCredentials(BadCredentialsException ex) {
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.UNAUTHORIZED.value())
-                .error("Unauthorized")
-                .message("Invalid email/mobile or password")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.UNAUTHORIZED);
-    }
-
-    // 10. Handles Access Denied / Role restrictions (HTTP 403)
-    @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ErrorResponse> handleAccessDenied(AccessDeniedException ex) {
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.FORBIDDEN.value())
-                .error("Forbidden")
-                .message("You do not have permission to access this resource")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.FORBIDDEN);
-    }
-
-    // 11. Handles Wrong HTTP Methods e.g. GET on POST endpoint (HTTP 405)
-    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
-    public ResponseEntity<ErrorResponse> handleMethodNotSupported(HttpRequestMethodNotSupportedException ex) {
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.METHOD_NOT_ALLOWED.value())
-                .error("Method Not Allowed")
-                .message(ex.getMessage())
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.METHOD_NOT_ALLOWED);
-    }
-
-    // 12. Handles Explicit Business Logic Validations (HTTP 400)
+    // 7. Business rule failed, e.g. "Semester must be between 1 and 4 for PG" (400)
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
         log.warn("Illegal argument: {}", ex.getMessage());
-
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error("Invalid Argument")
-                .message(ex.getMessage())
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+        return build(HttpStatus.BAD_REQUEST, "Invalid Argument", ex.getMessage());
     }
 
-    // 13. General Business Runtime Failures (HTTP 400)
-    @ExceptionHandler(RuntimeException.class)
-    public ResponseEntity<ErrorResponse> handleRuntimeExceptions(RuntimeException ex) {
-        log.error("Unhandled runtime exception: ", ex);
-
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error("Operation Failed")
-                .message(ex.getMessage())
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+    // 8. Record not found by id (404)
+    @ExceptionHandler(NoSuchElementException.class)
+    public ResponseEntity<ErrorResponse> handleNotFound(NoSuchElementException ex) {
+        return build(HttpStatus.NOT_FOUND, "Resource Not Found",
+                ex.getMessage() != null ? ex.getMessage() : "Requested resource was not found");
     }
 
-    // 13a. Wrong Content-Type from the client, e.g. text/plain or form data instead of JSON (HTTP 415)
-    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
-    public ResponseEntity<ErrorResponse> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException ex) {
-        log.warn("Unsupported media type: {}", ex.getMessage());
-
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.UNSUPPORTED_MEDIA_TYPE.value())
-                .error("Unsupported Media Type")
-                .message("Send the request body as JSON with the header Content-Type: application/json")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.UNSUPPORTED_MEDIA_TYPE);
-    }
-
-    // 13b. Client asked for a response format we can't produce (HTTP 406)
-    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
-    public ResponseEntity<ErrorResponse> handleMediaTypeNotAcceptable(HttpMediaTypeNotAcceptableException ex) {
-        log.warn("Not acceptable: {}", ex.getMessage());
-
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.NOT_ACCEPTABLE.value())
-                .error("Not Acceptable")
-                .message("This endpoint only returns JSON")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.NOT_ACCEPTABLE);
-    }
-
-    // 13c. Wrong URL, e.g. a typo or an extra "/" at the end of the path (HTTP 404)
+    // 9. Wrong URL, e.g. a typo or an extra "/" at the end (404)
     @ExceptionHandler(NoResourceFoundException.class)
     public ResponseEntity<ErrorResponse> handleNoResourceFound(NoResourceFoundException ex) {
         log.warn("No endpoint found for {}", ex.getResourcePath());
-
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.NOT_FOUND.value())
-                .error("Not Found")
-                .message("No endpoint exists at this URL: /" + ex.getResourcePath())
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.NOT_FOUND);
+        return build(HttpStatus.NOT_FOUND, "Not Found", "No endpoint exists at this URL: /" + ex.getResourcePath());
     }
 
-    // 13d. Uploaded file is bigger than the configured limit (HTTP 413)
+    // 10. Wrong HTTP method, e.g. GET on a POST endpoint (405)
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotSupported(HttpRequestMethodNotSupportedException ex) {
+        return build(HttpStatus.METHOD_NOT_ALLOWED, "Method Not Allowed", ex.getMessage());
+    }
+
+    // 11. Client asked for a format we can't produce (406)
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ErrorResponse> handleMediaTypeNotAcceptable(HttpMediaTypeNotAcceptableException ex) {
+        log.warn("Not acceptable: {}", ex.getMessage());
+        return build(HttpStatus.NOT_ACCEPTABLE, "Not Acceptable", "This endpoint only returns JSON");
+    }
+
+    // 12. Uploaded file bigger than app.upload.max-size-mb (413)
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ErrorResponse> handleUploadTooLarge(MaxUploadSizeExceededException ex) {
         log.warn("Upload too large: {}", ex.getMessage());
-
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.PAYLOAD_TOO_LARGE.value())
-                .error("File Too Large")
-                .message("The file is too large. Please upload a smaller file.")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.PAYLOAD_TOO_LARGE);
+        return build(HttpStatus.PAYLOAD_TOO_LARGE, "File Too Large", "The file is too large. Please upload a smaller file.");
     }
 
-    // 13e. The file part is missing from a multipart request (HTTP 400)
-    @ExceptionHandler(MissingServletRequestPartException.class)
-    public ResponseEntity<ErrorResponse> handleMissingPart(MissingServletRequestPartException ex) {
-        ErrorResponse response = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error("Missing File")
-                .message("Attach the file as the form field '" + ex.getRequestPartName() + "'")
-                .build();
-
-        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+    // 13. Wrong Content-Type, e.g. text/plain instead of JSON (415)
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException ex) {
+        log.warn("Unsupported media type: {}", ex.getMessage());
+        return build(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Unsupported Media Type",
+                "Send the request body as JSON with the header Content-Type: application/json");
     }
 
-    // 14. Catch-all for Unexpected Server Crashes (HTTP 500)
+    // =====================================================================
+    // SECURITY (401 / 403)
+    // =====================================================================
+
+    // 14. Expired / tampered JWT (401)
+    @ExceptionHandler({ExpiredJwtException.class, SignatureException.class, MalformedJwtException.class})
+    public ResponseEntity<ErrorResponse> handleJwtExceptions(Exception ex) {
+        log.warn("JWT validation issue: {}", ex.getMessage());
+        return build(HttpStatus.UNAUTHORIZED, "Invalid JWT Token", "Token has expired or is invalid. Please log in again.");
+    }
+
+    // 15. Wrong email/mobile or password (401)
+    @ExceptionHandler(BadCredentialsException.class)
+    public ResponseEntity<ErrorResponse> handleBadCredentials(BadCredentialsException ex) {
+        return build(HttpStatus.UNAUTHORIZED, "Unauthorized", "Invalid email/mobile or password");
+    }
+
+    // 16. Disabled or locked account (403)
+    @ExceptionHandler({DisabledException.class, LockedException.class})
+    public ResponseEntity<ErrorResponse> handleDisabledAccount(RuntimeException ex) {
+        return build(HttpStatus.FORBIDDEN, "Account Disabled", "Your account is disabled. Please contact support.");
+    }
+
+    // 17. Logged in but not allowed, e.g. a student calling an admin API (403)
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleAccessDenied(AccessDeniedException ex) {
+        return build(HttpStatus.FORBIDDEN, "Forbidden",
+                ex.getMessage() != null && !ex.getMessage().isBlank() && !"Access Denied".equals(ex.getMessage())
+                        ? ex.getMessage()
+                        : "You do not have permission to access this resource");
+    }
+
+    // =====================================================================
+    // DATABASE (409 / 400)
+    // =====================================================================
+
+    // 18. Database rule broken: duplicate unique key (409), record still referenced (409), missing value (400)
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        String cause = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : ex.getMessage();
+        log.warn("Database constraint violation: {}", cause);
+        String text = cause == null ? "" : cause.toLowerCase(Locale.ROOT);
+
+        if (text.contains("duplicate")) {
+            return build(HttpStatus.CONFLICT, "Duplicate Entry", duplicateMessage(text));
+        }
+        if (text.contains("foreign key")) {
+            return build(HttpStatus.CONFLICT, "Related Record Problem",
+                    "This record is linked to other records, or a linked record does not exist.");
+        }
+        if (text.contains("cannot be null") || text.contains("doesn't have a default value")) {
+            return build(HttpStatus.BAD_REQUEST, "Missing Value", "A required value is missing.");
+        }
+        if (text.contains("data too long")) {
+            return build(HttpStatus.BAD_REQUEST, "Value Too Long", "One of the values is longer than allowed.");
+        }
+        return build(HttpStatus.CONFLICT, "Conflict", "The data could not be saved because it breaks a database rule.");
+    }
+
+    // Friendly text for MySQL/TiDB "Duplicate entry '...' for key '...'" (matched on the column / key name)
+    private String duplicateMessage(String text) {
+        if (text.contains("email")) return "This email is already registered";
+        if (text.contains("mobile")) return "This mobile number is already registered";
+        if (text.contains("registration_number")) return "This registration number is already registered";
+        if (text.contains("college_roll")) return "This roll number is already registered in this college";
+        if (text.contains("razorpay_order") || text.contains("razorpay_payment")) return "This payment is already recorded";
+        if (text.contains("letter") || text.contains("sequence_number"))
+            return "Another acceptance letter was generated at the same moment. Please try again.";
+        if (text.contains("academic_sessions")) return "This academic session already exists";
+        if (text.contains("major_subjects")) return "This major subject already exists";
+        if (text.contains("verification_token")) return "Please verify your email again";
+        return "This record already exists";
+    }
+
+    // 19. Two requests changed the same row at the same time (TiDB lock conflict) (409)
+    @ExceptionHandler({PessimisticLockingFailureException.class, ObjectOptimisticLockingFailureException.class})
+    public ResponseEntity<ErrorResponse> handleLockConflict(RuntimeException ex) {
+        log.warn("Lock conflict: {}", ex.getMessage());
+        return build(HttpStatus.CONFLICT, "Busy", "This record is being updated by another request. Please try again.");
+    }
+
+    // =====================================================================
+    // PAYMENT GATEWAY (502)
+    // =====================================================================
+
+    // 20. Razorpay rejected or could not be reached while creating an order (502)
+    @ExceptionHandler(RazorpayException.class)
+    public ResponseEntity<ErrorResponse> handleRazorpay(RazorpayException ex) {
+        log.error("Razorpay error: {}", ex.getMessage());
+        return build(HttpStatus.BAD_GATEWAY, "Payment Gateway Error",
+                "Could not reach the payment gateway. Please try again in a moment.");
+    }
+
+    // =====================================================================
+    // FALLBACKS
+    // =====================================================================
+
+    // 21. Plain RuntimeException thrown by our services with a user-facing message, e.g. "Passwords do not match" (400).
+    //     Any other runtime error (NullPointerException, IllegalStateException, ...) is a server bug: 500, details only in the log.
+    @ExceptionHandler(RuntimeException.class)
+    public ResponseEntity<ErrorResponse> handleRuntimeExceptions(RuntimeException ex) {
+        if (ex.getClass() == RuntimeException.class && ex.getMessage() != null) {
+            log.warn("Business rule failed: {}", ex.getMessage());
+            return build(HttpStatus.BAD_REQUEST, "Operation Failed", ex.getMessage());
+        }
+        log.error("Unexpected runtime error: ", ex);
+        return build(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error",
+                "Something went wrong on our side. Please try again later.");
+    }
+
+    // 22. Anything else (500)
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGlobalExceptions(Exception ex) {
         log.error("Critical server crash: ", ex);
+        return build(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error",
+                "An unexpected error occurred. Please contact system support.");
+    }
 
+    // ---------------------------------------------------------------- helper
+    private ResponseEntity<ErrorResponse> build(HttpStatus status, String error, String message) {
         ErrorResponse response = ErrorResponse.builder()
                 .timestamp(LocalDateTime.now())
-                .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
-                .error("Internal Server Error")
-                .message("An unexpected error occurred. Please contact system support.")
+                .status(status.value())
+                .error(error)
+                .message(message)
                 .build();
-
-        return new ResponseEntity<>(response, HttpStatus.INTERNAL_SERVER_ERROR);
+        return new ResponseEntity<>(response, status);
     }
 }
