@@ -7,11 +7,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.unit.DataSize;
 
-/** Raises the upload limit from Spring's 1 MB default to app.upload.max-size-mb (default 5 MB). */
+/** Sets the upload limit to app.upload.max-size-mb (default 1 MB). */
 @Configuration
 public class UploadConfig {
 
-    @Value("${app.upload.max-size-mb:5}")
+    @Value("${app.upload.max-size-mb:1}")
     private long maxSizeMb;
 
     @Bean

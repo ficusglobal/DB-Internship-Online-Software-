@@ -30,7 +30,7 @@ public class FileStorageService {
     @Value("${app.upload.dir:./uploads}")
     private String uploadDir;
 
-    @Value("${app.upload.max-size-mb:5}")
+    @Value("${app.upload.max-size-mb:1}")
     private long maxSizeMb;
 
     private Path root;

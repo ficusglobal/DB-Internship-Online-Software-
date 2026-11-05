@@ -14,7 +14,8 @@ import java.util.regex.Pattern;
 
 /**
  * Duplicate checks for the student registration form.
- *  - email and mobile no.  : unique across all users
+ *  - email                 : unique across all users
+ *  - mobile no.            : unique across all users (one account per mobile number)
  *  - registration no.      : unique across all students (digits only)
  *  - college roll no.      : unique within the same college (digits only)
  * Used live by the form (GET /api/auth/register/check) and again when the form is submitted.
@@ -23,7 +24,8 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class RegistrationCheckService {
 
-    public static final Pattern MOBILE = Pattern.compile("^[0-9]{10}$");
+    public static final Pattern MOBILE = Pattern.compile("^[6-9][0-9]{9}$");
+    public static final Pattern EMAIL = Pattern.compile("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
     public static final Pattern DIGITS = Pattern.compile("^[0-9]{1,20}$");
 
     private final UserRepository userRepository;
@@ -37,6 +39,9 @@ public class RegistrationCheckService {
         RegistrationCheckResponse.RegistrationCheckResponseBuilder result = RegistrationCheckResponse.builder();
 
         if (hasText(email)) {
+            if (!EMAIL.matcher(email.trim()).matches()) {
+                throw new IllegalArgumentException("Please provide a valid email, e.g. name@example.com");
+            }
             boolean exists = userRepository.existsByEmailIgnoreCase(email.trim());
             result.emailExists(exists);
             if (exists) messages.put("email", "This email is already registered");
@@ -44,7 +49,7 @@ public class RegistrationCheckService {
         if (hasText(mobileNo)) {
             String mobile = mobileNo.trim();
             if (!MOBILE.matcher(mobile).matches()) {
-                throw new IllegalArgumentException("Mobile number must be exactly 10 digits");
+                throw new IllegalArgumentException("Enter a valid 10-digit mobile number starting with 6, 7, 8 or 9");
             }
             boolean exists = userRepository.existsByMobileNo(mobile);
             result.mobileNoExists(exists);

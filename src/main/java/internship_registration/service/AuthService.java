@@ -10,9 +10,7 @@ import internship_registration.entity.enums.Role;
 import internship_registration.repository.*;
 import internship_registration.security.JwtService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -23,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
@@ -40,7 +39,6 @@ public class AuthService {
     private final RegistrationEmailVerificationService emailVerificationService;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
-    private final AuthenticationManager authenticationManager;
 
     // --- UNIVERSAL LOGIN ---
     @Transactional
@@ -52,14 +50,14 @@ public class AuthService {
 
         String identifier = request.getEmailOrMobile().trim();
 
+        // One account per email (any letter case) and one per mobile number.
         // Same error for "no such user" and "wrong password" so accounts can't be probed
-        User user = userRepository.findByEmailOrMobileNo(identifier, identifier)
+        User user = userRepository.findFirstByEmailIgnoreCaseOrMobileNo(identifier, identifier)
                 .orElseThrow(() -> new BadCredentialsException("Invalid credentials"));
 
-        // Throws BadCredentialsException on a wrong password
-        authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(user.getId(), request.getPassword())
-        );
+        if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
+            throw new BadCredentialsException("Invalid credentials");
+        }
 
         if (!user.isActive()) {
             throw new RuntimeException("Your account is disabled. Please contact support.");
@@ -68,7 +66,20 @@ public class AuthService {
         user.setLastLogin(LocalDateTime.now());
         userRepository.save(user);
 
-        return generateAuthResponse(user);
+        AuthResponse response = generateAuthResponse(user);
+
+        // Student: also return the latest registration, so the frontend doesn't need a second call
+        if (user.getRole() == Role.STUDENT) {
+            studentRepository.findByUser_Id(user.getId()).ifPresent(student -> {
+                response.setStudentId(student.getId());
+                internshipRegistrationRepository.findFirstByStudent_IdOrderByCreatedAtDesc(student.getId())
+                        .ifPresent(reg -> {
+                            response.setRegistrationId(reg.getId());
+                            response.setRegistrationStatus(reg.getStatus() != null ? reg.getStatus().name() : null);
+                        });
+            });
+        }
+        return response;
     }
 
     // --- STUDENT REGISTRATION (email must already be verified with the OTP) ---
@@ -85,13 +96,15 @@ public class AuthService {
             throw new IllegalArgumentException("You must accept the Terms of Service and Privacy Policy");
         }
 
-        String email = request.getEmail().trim();
+        // Emails are stored in lower case, so Ravi@Gmail.com and ravi@gmail.com are the same account
+        String email = request.getEmail().trim().toLowerCase(Locale.ROOT);
         String mobileNo = request.getMobileNo().trim();
         String registrationNumber = blankToNull(request.getRegistrationNumber());
-        String collegeRollNumber = blankToNull(request.getCollegeRollNumber());
-        if (registrationNumber != null) {
-            registrationNumber = RegistrationCheckService.digitsOnly(registrationNumber, "Registration number");
+        if (registrationNumber == null) {
+            throw new IllegalArgumentException("Registration number is required");
         }
+        registrationNumber = RegistrationCheckService.digitsOnly(registrationNumber, "Registration number");
+        String collegeRollNumber = blankToNull(request.getCollegeRollNumber());
         if (collegeRollNumber != null) {
             collegeRollNumber = RegistrationCheckService.digitsOnly(collegeRollNumber, "College roll number");
         }
@@ -204,7 +217,7 @@ public class AuthService {
                 .build();
         student = studentRepository.save(student);
 
-        // 10. Cyber Cafe Detection
+        // 10. Cybercafe Detection
         CyberCafe registeringCafe = null;
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth != null && auth.isAuthenticated() && !"anonymousUser".equals(auth.getPrincipal())) {
@@ -224,9 +237,14 @@ public class AuthService {
                 .payableAmount(batchFee)
                 .isCertificateProvided(false)
                 .build();
-        internshipRegistrationRepository.save(registration);
+        registration = internshipRegistrationRepository.save(registration);
 
-        return generateAuthResponse(user);
+        // The frontend needs these right away for consent upload, payment and the letter
+        AuthResponse response = generateAuthResponse(user);
+        response.setStudentId(student.getId());
+        response.setRegistrationId(registration.getId());
+        response.setRegistrationStatus(registration.getStatus().name());
+        return response;
     }
 
     // --- CYBER CAFE REGISTRATION ---

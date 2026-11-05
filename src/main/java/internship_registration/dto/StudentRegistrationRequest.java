@@ -25,14 +25,15 @@ public class StudentRegistrationRequest {
     private String fullName;
 
     @NotBlank(message = "Email is required")
-    @Email(message = "Please provide a valid email format (e.g., name@example.com)")
+    @Size(max = 255, message = "Email can be at most 255 characters")
+    @Email(regexp = "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$", message = "Please provide a valid email, e.g. name@example.com")
     private String email;
 
     @NotBlank(message = "Please verify your email with the OTP before registering")
     private String emailVerificationToken;
 
     @NotBlank(message = "Mobile number is required")
-    @Pattern(regexp = "^[0-9]{10}$", message = "Mobile number must be exactly 10 digits")
+    @Pattern(regexp = "^[6-9][0-9]{9}$", message = "Enter a valid 10-digit mobile number starting with 6, 7, 8 or 9")
     private String mobileNo;
 
     @NotBlank(message = "Password is required")
@@ -44,6 +45,7 @@ public class StudentRegistrationRequest {
     @NotNull(message = "College is required")
     private Integer collegeId;
 
+    @Size(max = 150, message = "Father's name can be at most 150 characters")
     private String fatherName;
 
     @NotBlank(message = "Gender is required")
@@ -70,8 +72,9 @@ public class StudentRegistrationRequest {
     @NotNull(message = "Major subject is required")
     private Integer majorSubjectId;
 
-    // Optional, but digits only when given
-    @Pattern(regexp = "^$|^[0-9]{1,20}$", message = "Registration number must contain digits only")
+    // Required: identifies the student (unique). Digits only.
+    @NotBlank(message = "Registration number is required")
+    @Pattern(regexp = "^[0-9]{1,20}$", message = "Registration number must contain digits only")
     private String registrationNumber;
 
     // Optional, but digits only when given
