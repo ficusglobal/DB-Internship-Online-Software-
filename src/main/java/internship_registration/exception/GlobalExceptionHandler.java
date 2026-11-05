@@ -6,6 +6,7 @@ import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.MalformedJwtException;
 import io.jsonwebtoken.security.SignatureException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
@@ -46,6 +47,10 @@ import java.util.NoSuchElementException;
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
+
+    // Same setting as the upload limit, so the message always shows the real limit
+    @Value("${app.upload.max-size-mb:1}")
+    private long maxUploadMb;
 
     // =====================================================================
     // APPLICATION EXCEPTIONS
@@ -166,7 +171,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ErrorResponse> handleUploadTooLarge(MaxUploadSizeExceededException ex) {
         log.warn("Upload too large: {}", ex.getMessage());
-        return build(HttpStatus.PAYLOAD_TOO_LARGE, "File Too Large", "The file is too large. Please upload a smaller file.");
+        return build(HttpStatus.PAYLOAD_TOO_LARGE, "File Too Large",
+                "The file is too large. Maximum size is " + maxUploadMb + " MB.");
     }
 
     // 13. Wrong Content-Type, e.g. text/plain instead of JSON (415)

@@ -11,6 +11,9 @@ public interface UserRepository extends JpaRepository<User, String> {
 
     Optional<User> findByEmailOrMobileNo(String email, String mobileNo);
 
+    // Login: email in any letter case, or the exact mobile number
+    Optional<User> findFirstByEmailIgnoreCaseOrMobileNo(String email, String mobileNo);
+
     Optional<User> findByEmailIgnoreCase(String email);
 
     boolean existsByEmail(String email);
