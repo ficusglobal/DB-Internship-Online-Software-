@@ -20,11 +20,15 @@ public class AcceptanceLetterResponse {
     private String letterNumber;
     private Integer sequenceNumber;
     private LocalDateTime generatedAt;
+    private String verificationCode;   // secret inside the QR code
+    private String verificationUrl;    // put THIS text in the QR code on the printed letter
 
     // ---- Student
     private String registrationId;
     private String studentId;
     private String studentName;
+    private boolean hasPhoto;
+    private String photoUrl;                    // GET with the JWT to print the photo; null when there is no photo
     private String fatherName;
     private String gender;
     private String email;

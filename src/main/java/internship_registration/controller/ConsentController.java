@@ -17,11 +17,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
-/**
- * Consent letter endpoints.
- *  - /api/student/registrations/{id}/consent : the student (or the cyber cafe that registered them) uploads and views it
- *  - /api/admin/**                           : SUPER_ADMIN lists, approves or rejects (URL rule in SecurityConfig)
- */
+
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor

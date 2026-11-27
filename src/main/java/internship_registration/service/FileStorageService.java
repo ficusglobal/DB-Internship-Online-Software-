@@ -26,12 +26,18 @@ import java.util.UUID;
 public class FileStorageService {
 
     private static final String CONSENT_DIR = "consents";
+    private static final String PHOTO_DIR = "photos";
+    private static final int MIN_PHOTO_SIDE_PX = 100;
 
     @Value("${app.upload.dir:./uploads}")
     private String uploadDir;
 
     @Value("${app.upload.max-size-mb:1}")
     private long maxSizeMb;
+
+    // Student photo limit in KB (default 500 KB). Must stay below app.upload.max-size-mb.
+    @Value("${app.upload.photo-max-kb:500}")
+    private long photoMaxKb;
 
     private Path root;
 
@@ -40,6 +46,7 @@ public class FileStorageService {
         root = Paths.get(uploadDir).toAbsolutePath().normalize();
         try {
             Files.createDirectories(root.resolve(CONSENT_DIR));
+            Files.createDirectories(root.resolve(PHOTO_DIR));
         } catch (IOException e) {
             throw new IllegalStateException("Cannot create the upload folder " + root + ": " + e.getMessage(), e);
         }
@@ -77,6 +84,60 @@ public class FileStorageService {
             throw new IllegalStateException("Could not save the uploaded file", e);
         }
         return CONSENT_DIR + "/" + fileName;
+    }
+
+    /**
+     * Validates and saves a student photo (JPG or PNG only, at most app.upload.photo-max-kb).
+     * Returns the stored path relative to the upload folder.
+     */
+    public String storePhoto(MultipartFile file, String studentId) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Please attach the student's photo");
+        }
+        if (file.getSize() > photoMaxKb * 1024) {
+            throw new IllegalArgumentException("The photo is too large. Maximum size is " + photoMaxKb + " KB");
+        }
+
+        byte[] data;
+        try {
+            data = file.getBytes();
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not read the uploaded photo", e);
+        }
+
+        // The type is decided by the file's content, never by its name or the browser's claim
+        String extension = detectExtension(data);
+        if (!".jpg".equals(extension) && !".png".equals(extension)) {
+            throw new IllegalArgumentException("The photo must be a JPG or PNG image");
+        }
+        checkPhotoSize(data);
+
+        // A generated name: the original name is never used
+        String fileName = studentId + "-" + UUID.randomUUID() + extension;
+        Path target = root.resolve(PHOTO_DIR).resolve(fileName).normalize();
+        try {
+            Files.write(target, data);
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not save the uploaded photo", e);
+        }
+        return PHOTO_DIR + "/" + fileName;
+    }
+
+    /** Rejects tiny images (icons, blank pixels). Images Java cannot decode are left to the type check. */
+    private void checkPhotoSize(byte[] data) {
+        try {
+            java.awt.image.BufferedImage image = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(data));
+            if (image == null) {
+                throw new IllegalArgumentException("The photo could not be read. Please upload a clear JPG or PNG image");
+            }
+            if (image.getWidth() < MIN_PHOTO_SIDE_PX || image.getHeight() < MIN_PHOTO_SIDE_PX) {
+                throw new IllegalArgumentException("The photo is too small. It must be at least "
+                        + MIN_PHOTO_SIDE_PX + " x " + MIN_PHOTO_SIDE_PX + " pixels");
+            }
+        } catch (IOException e) {
+            // Some valid JPGs (for example CMYK) cannot be decoded by Java; the type check above already passed
+            log.debug("Could not decode the photo to check its size: {}", e.getMessage());
+        }
     }
 
     public Resource load(String relativePath) {

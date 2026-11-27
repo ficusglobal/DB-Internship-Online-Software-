@@ -1,6 +1,7 @@
 package internship_registration.service;
 
 import internship_registration.dto.AcceptanceLetterResponse;
+import internship_registration.dto.LetterVerificationResponse;
 import internship_registration.entity.College;
 import internship_registration.entity.InternshipBatch;
 import internship_registration.entity.InternshipCourse;
@@ -18,13 +19,16 @@ import internship_registration.repository.StudentAcceptanceLetterRepository;
 import internship_registration.repository.StudentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.security.SecureRandom;
 import java.util.EnumSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
@@ -54,6 +58,18 @@ public class AcceptanceLetterService {
     private final InternshipBatchRepository batchRepository;
     private final StudentRepository studentRepository;
     private final PlatformTransactionManager transactionManager;
+
+    // QR code on the letter = this FRONTEND page address + the letter's verification code.
+    // The frontend page reads the code from its URL and calls GET /api/public/acceptance-letters/verify/{code}.
+    @Value("${app.letter.verify-base-url:http://localhost:3000/verify-letter/}")
+    private String verifyBaseUrl;
+
+    // QR page shows the full mobile number only when this is true; otherwise 98******10
+    @Value("${app.letter.verify.show-full-mobile:false}")
+    private boolean showFullMobileOnVerify;
+
+    private static final SecureRandom RANDOM = new SecureRandom();
+    private static final java.util.regex.Pattern CODE_PATTERN = java.util.regex.Pattern.compile("^[a-f0-9]{32}$");
 
     /** Idempotent: returns the existing letter if one was already generated. */
     public AcceptanceLetterResponse generate(String registrationId, String callerUserId, boolean callerIsAdmin) {
@@ -133,7 +149,112 @@ public class AcceptanceLetterService {
         return letterRepository.search(code, session).stream().map(this::toResponse).toList();
     }
 
+    /**
+     * Public QR check: what a college sees after scanning the letter.
+     * Unknown or badly formed code -> NoSuchElementException (404).
+     */
+    public LetterVerificationResponse verify(String code) {
+        String c = code == null ? "" : code.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!CODE_PATTERN.matcher(c).matches()) {
+            throw new NoSuchElementException("This QR code is not valid");
+        }
+        StudentAcceptanceLetter l = letterRepository.findByVerificationCode(c)
+                .orElseThrow(() -> new NoSuchElementException("This QR code is not valid"));
+
+        AcceptanceLetterResponse d = toResponse(l);
+        InternshipRegistration reg = registrationRepository.findById(l.getRegistrationId()).orElse(null);
+        boolean active = reg != null && ELIGIBLE_STATUSES.contains(reg.getStatus());
+
+        return LetterVerificationResponse.builder()
+                .valid(active)
+                .status(active ? "VALID" : "CANCELLED")
+                .message(active
+                        ? "This acceptance letter is genuine and was issued by Ficus Global."
+                        : "This acceptance letter was issued but the internship registration is no longer active.")
+                .letterNumber(d.getLetterNumber())
+                .issuedAt(d.getGeneratedAt())
+                .studentName(d.getStudentName())
+                .photoUrl(d.isHasPhoto() ? StudentPhotoService.publicPhotoPath(c) : null)
+                .mobileNo(showFullMobileOnVerify ? d.getMobileNo() : maskMobile(d.getMobileNo()))
+                .fatherName(d.getFatherName())
+                .gender(d.getGender())
+                .registrationNumber(d.getStudentRegistrationNumber())
+                .collegeRollNumber(d.getCollegeRollNumber())
+                .degree(d.getDegree())
+                .department(d.getDepartment())
+                .semester(d.getSemester())
+                .academicSession(d.getAcademicSession())
+                .majorSubject(d.getMajorSubject())
+                .collegeName(d.getCollegeName())
+                .collegeCode(d.getCollegeCode())
+                .district(d.getDistrict())
+                .universityName(d.getUniversityName())
+                .courseName(d.getCourseName())
+                .batchName(d.getBatchName())
+                .startDate(d.getBatchStartDate())
+                .endDate(d.getBatchEndDate())
+                .durationDays(durationDays(d.getBatchStartDate(), d.getBatchEndDate()))
+                .theoryDurationHours(d.getTheoryDurationHours())
+                .practicalDurationHours(d.getPracticalDurationHours())
+                .reportPreparationHours(d.getReportPreparationHours())
+                .totalDurationHours(d.getTotalDurationHours())
+                .internshipStatus(d.getRegistrationStatus())
+                .build();
+    }
+
     // ------------------------------------------------------------------ INTERNALS
+
+    private static boolean hasPhoto(Student s) {
+        return s != null && s.getPhotoUrl() != null && !s.getPhotoUrl().isBlank();
+    }
+
+    /** 9876543210 -> 98******10 */
+    private static String maskMobile(String mobile) {
+        if (mobile == null || mobile.isBlank()) {
+            return null;
+        }
+        String m = mobile.trim();
+        if (m.length() <= 4) {
+            return "*".repeat(m.length());
+        }
+        return m.substring(0, 2) + "*".repeat(m.length() - 4) + m.substring(m.length() - 2);
+    }
+
+    /** Both days counted: 26 Oct to 30 Oct = 5 days. */
+    private static Long durationDays(java.time.LocalDate from, java.time.LocalDate to) {
+        if (from == null || to == null || to.isBefore(from)) {
+            return null;
+        }
+        return java.time.temporal.ChronoUnit.DAYS.between(from, to) + 1;
+    }
+
+    /** 128 random bits as 32 hex characters: impossible to guess. */
+    private static String newVerificationCode() {
+        byte[] bytes = new byte[16];
+        RANDOM.nextBytes(bytes);
+        return HexFormat.of().formatHex(bytes);
+    }
+
+    /** Letters made before the QR feature get their code the first time they are opened. */
+    private String ensureVerificationCode(StudentAcceptanceLetter l) {
+        if (l.getVerificationCode() != null) {
+            return l.getVerificationCode();
+        }
+        letterRepository.setVerificationCodeIfMissing(l.getId(), newVerificationCode());
+        String code = letterRepository.findById(l.getId())
+                .map(StudentAcceptanceLetter::getVerificationCode)
+                .orElse(null);
+        l.setVerificationCode(code);
+        return code;
+    }
+
+    private String verificationUrl(String code) {
+        if (code == null) {
+            return null;
+        }
+        String base = verifyBaseUrl.trim();
+        return base.endsWith("/") ? base + code : base + "/" + code;
+    }
 
     private StudentAcceptanceLetter allocate(String registrationId, String collegeCode, String session) {
         Optional<StudentAcceptanceLetter> existing = letterRepository.findByRegistrationId(registrationId);
@@ -152,6 +273,7 @@ public class AcceptanceLetterService {
                 .academicSession(session)
                 .sequenceNumber(next)
                 .letterNumber(letterNumber)
+                .verificationCode(newVerificationCode())
                 .build());
     }
 
@@ -178,6 +300,7 @@ public class AcceptanceLetterService {
 
     /** Builds the full letter data: letter + student + college + university + batch + course. */
     private AcceptanceLetterResponse toResponse(StudentAcceptanceLetter l) {
+        String code = ensureVerificationCode(l);
         InternshipRegistration reg = registrationRepository.findById(l.getRegistrationId()).orElse(null);
         Student student = reg != null ? reg.getStudent() : null;
         User user = student != null ? student.getUser() : null;
@@ -196,10 +319,14 @@ public class AcceptanceLetterService {
                 .letterNumber(l.getLetterNumber())
                 .sequenceNumber(l.getSequenceNumber())
                 .generatedAt(l.getGeneratedAt())
+                .verificationCode(code)
+                .verificationUrl(verificationUrl(code))
                 // student
                 .registrationId(l.getRegistrationId())
                 .studentId(student != null ? student.getId() : null)
                 .studentName(user != null ? user.getName() : null)
+                .hasPhoto(hasPhoto(student))
+                .photoUrl(hasPhoto(student) ? StudentPhotoService.photoPath(l.getRegistrationId()) : null)
                 .fatherName(student != null ? student.getFatherName() : null)
                 .gender(student != null && student.getGender() != null ? student.getGender().name() : null)
                 .email(user != null ? user.getEmail() : null)

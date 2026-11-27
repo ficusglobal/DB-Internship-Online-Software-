@@ -38,6 +38,12 @@ public class StudentAcceptanceLetter {
     @Column(name = "letter_number", nullable = false, length = 100)
     private String letterNumber;
 
+    // Random secret printed inside the QR code (32 hex characters). Not the letter number, because the
+    // letter number is sequential and anyone could guess the next one and read other students' details.
+    // NULL for letters made before this column existed; filled the first time the letter is opened.
+    @Column(name = "verification_code", length = 64, unique = true)
+    private String verificationCode;
+
     @CreationTimestamp
     @Column(name = "generated_at", nullable = false, updatable = false)
     private LocalDateTime generatedAt;
