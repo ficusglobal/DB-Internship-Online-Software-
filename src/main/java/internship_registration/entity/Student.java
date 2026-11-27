@@ -75,6 +75,13 @@ public class Student extends BaseEntity {
     @Column(name = "major_subject", length = 150)
     private String majorSubject;
 
+    // Student photo (optional). Path inside the upload folder, e.g. photos/<studentId>-<uuid>.jpg
+    @Column(name = "photo_url", length = 500)
+    private String photoUrl;
+
+    @Column(name = "photo_uploaded_at")
+    private java.time.LocalDateTime photoUploadedAt;
+
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 }

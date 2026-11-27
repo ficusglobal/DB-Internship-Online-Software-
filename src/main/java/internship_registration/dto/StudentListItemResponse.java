@@ -21,11 +21,15 @@ public class StudentListItemResponse {
     private BigDecimal payableAmount;
     private String consentStatus;
     private LocalDateTime registeredAt;
-    private String registeredByCyberCafe;
+    private String registeredBy;         // SELF or CYBER_CAFE
+    private String registeredByCyberCafe; // shop name (null when SELF); kept for older frontends
+    private CyberCafeInfoResponse cyberCafe; // full cafe details (null when SELF)
 
     // ---- Student
     private String studentId;
     private String studentName;
+    private boolean hasPhoto;
+    private String photoUrl;             // GET with the JWT to show the photo; null when there is no photo
     private String email;
     private String mobileNo;
     private String fatherName;

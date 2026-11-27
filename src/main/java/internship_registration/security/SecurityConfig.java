@@ -53,6 +53,9 @@ public class SecurityConfig {
                         // 6. Restricted Super Admin Endpoints
                         .requestMatchers("/api/admin/**").hasAuthority("SUPER_ADMIN")
 
+                        // 6b. Cyber cafe dashboard (own registered students)
+                        .requestMatchers("/api/cyber-cafe/**").hasAuthority("CYBER_CAFE")
+
                         // 7. Authenticated Student, Payment, and User Endpoints
                         .requestMatchers("/api/student/**").authenticated()
                         .requestMatchers("/api/payment/**").authenticated()
